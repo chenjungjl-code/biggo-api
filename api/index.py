@@ -4,62 +4,60 @@ import re
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length)
-        
         try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
             data = json.loads(post_data)
             html = data.get('html', '')
-            items = []
-
-            # --- 核心邏輯：鎖定 INITIAL_STATE 區塊 ---
-            # 這是 BigGo 目前最核心的資料存放區
-            state_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?});', html, re.DOTALL)
             
-            if state_match:
-                try:
-                    state_json = json.loads(state_match.group(1))
-                    # 嘗試從 search results 結構中提取
-                    raw_results = state_json.get('search', {}).get('results', [])
-                    for r in raw_results:
-                        if 'n' in r and 'p' in r:
-                            items.append({
-                                "title": r['n'],
-                                "price": int(r['p']),
-                                "shop": r.get('s', '網路商城')
-                            })
-                except:
-                    pass
+            items = []
+            
+            # --- 核心策略：針對 58 萬字的大型網頁進行特徵提取 ---
+            # 這是 BigGo 商品資料最穩定的特徵格式
+            # 我們改用非貪婪匹配，並允許中間有換行符 (re.S)
+            matches = re.findall(r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)', html, re.S)
+            
+            for n, p in matches:
+                # 過濾掉一些系統內建的雜項 (通常品名很短)
+                if len(n) > 5:
+                    items.append({
+                        "title": n,
+                        "price": int(p),
+                        "shop": "BigGo比價"
+                    })
 
-            # --- 備用方案：暴力正則 (如果 INITIAL_STATE 結構改變) ---
+            # 如果上面失敗，嘗試另一種 BigGo 可能的格式 (全名+價格)
             if not items:
-                # 匹配 "n":"品名" 和 "p":價格
-                matches = re.findall(r'"n":"([^"]+?)".*?"p":(\d+)', html)
-                for n, p in matches:
-                    if len(n) > 5:
-                        items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
+                matches_alt = re.findall(r'"name"\s*:\s*"([^"]+)"\s*,\s*"price"\s*:\s*(\d+)', html, re.S)
+                for n, p in matches_alt:
+                    items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
 
-            # 移除重複，取前 15 筆
-            unique_results = []
+            # 去重與限額
+            unique_items = []
             seen = set()
             for item in items:
                 if item['title'] not in seen:
-                    unique_results.append(item)
+                    unique_items.append(item)
                     seen.add(item['title'])
-                if len(unique_results) >= 15: break
+                if len(unique_items) >= 20: break
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps(unique_results).encode('utf-8'))
+            
+            # 確保回傳 JSON 格式
+            response_json = json.dumps(unique_items)
+            self.wfile.write(response_json.encode('utf-8'))
             
         except Exception as e:
             self.send_response(200)
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": f"解析失敗: {str(e)}", "price": 0}]).encode('utf-8'))
+            # 發生錯誤時回傳空的陣列
+            self.wfile.write(json.dumps([]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Deep Parser Ready.")
+        self.wfile.write(b"Parser is running.")
