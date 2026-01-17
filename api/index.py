@@ -10,48 +10,45 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(post_data)
             html = data.get('html', '')
             
+            # 策略 A: 針對 BigGo 可能的 Unicode 混淆進行解碼
+            # 有時候資料會長這樣: \u0022n\u0022:\u0022Ariel\u0022
+            decoded_html = html.encode().decode('unicode_escape', 'ignore')
+            
             items = []
+            # 同時在原始與解碼後的 HTML 中搜尋
+            sources = [html, decoded_html]
             
-            # 策略 A: 針對 BigGo 的特殊屬性 data-n 和 data-p (如果有的話)
-            # 或是在腳本標籤內的特定格式
-            raw_patterns = [
-                r'"n":"([^"]+?)".*?"p":(\d+)',           # 傳統格式
-                r'name":"([^"]+?)".*?price":(\d+)',       # 標準格式
-                r'title":"([^"]+?)".*?price":(\d+)',      # 變體格式
-                r'\"n\":\"([^"]+?)\",\"p\":(\d+)'         # 帶轉義格式
-            ]
-            
-            for pattern in raw_patterns:
-                matches = re.findall(pattern, html, re.S)
-                for n, p in matches:
-                    if len(n) > 8 and len(n) < 100: # 確保品名長度合理
-                        items.append({
-                            "title": n.encode().decode('unicode_escape', 'ignore') if '\\u' in n else n,
-                            "price": int(p),
-                            "shop": "BigGo比價"
-                        })
-            
-            # 策略 B: 針對 unicode 編碼處理 (BigGo 常見)
-            # 例如 \u6d17\u8863\u7cbe
-            if not items:
-                unicode_matches = re.findall(r'\\u[0-9a-fA-F]{4}', html)
-                if unicode_matches:
-                    # 如果發現大量 unicode，嘗試直接抓取價格周圍的文字
-                    items.append({"title": "偵測到加密編碼，正在嘗試解析...", "price": 0, "shop": "System"})
+            for source in sources:
+                # 嘗試多種匹配模式
+                patterns = [
+                    r'"n":"([^"]+?)".*?"p":(\d+)',
+                    r'name":"([^"]+?)".*?price":(\d+)',
+                    r'title":"([^"]+?)".*?price":(\d+)'
+                ]
+                for p in patterns:
+                    for n, price in re.findall(p, source):
+                        if 5 < len(n) < 100:
+                            items.append({"title": n, "price": int(price), "shop": "BigGo比價"})
 
-            # 去重
+            # 如果還是空，抓取 HTML 中的腳本區塊 (Script) 做最後診斷
+            if not items:
+                scripts = re.findall(r'<script.*?> (.*?)</script>', html, re.S)
+                for s in scripts[:5]:
+                    if "n" in s and "p" in s: # 如果腳本裡有類似格式
+                        items.append({"title": "找到潛在資料塊，請檢查解析規則", "price": 0, "shop": "System"})
+
             unique_items = []
             seen = set()
             for item in items:
-                if item['title'] not in seen and item['price'] > 0:
+                if item['title'] not in seen:
                     unique_items.append(item)
                     seen.add(item['title'])
-            
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps(unique_items[:20]).encode('utf-8'))
+            self.wfile.write(json.dumps(unique_items[:15]).encode('utf-8'))
             
         except Exception as e:
             self.send_response(200)
@@ -61,4 +58,4 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Scanner v3 Active")
+        self.wfile.write(b"Diagnostic Parser Online")
