@@ -2,54 +2,54 @@ from http.server import BaseHTTPRequestHandler
 import json
 import re
 import urllib.request
+from urllib.parse import urljoin
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             content_length = int(self.headers.get('Content-Length', 0))
             data = json.loads(self.rfile.read(content_length))
-            url = data.get('url', '').replace("biggo.uk", "biggo.com.tw")
+            base_url = data.get('url', '').replace("biggo.uk", "biggo.com.tw")
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept-Language': 'zh-TW,zh;q=0.9',
                 'Cookie': 'biggo_country=tw'
             }
             
-            req = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(base_url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as response:
                 html = response.read().decode('utf-8', 'ignore')
 
             items = []
             
-            # --- 針對你回傳的標籤特徵進行抓取 ---
-            # 1. 抓取品名：通常在 <img> 的 alt 屬性或特定的 title class
-            # 2. 抓取價格：針對你看到的 data-price="true">$數字
-            
-            # 模式 A：尋找價格 (抓取像 $279 的數字)
-            # 我們找：data-price="true">\$?(\d+,?\d*)
-            price_matches = re.findall(r'data-price="true">\$?([\d,]+)', html)
-            
-            # 模式 B：尋找品名 (通常在價格附近的 <img> alt 標籤裡)
-            name_matches = re.findall(r'alt="([^"]{10,100})"', html)
+            # --- 強化版抓取：同時尋找品名、價格、與連結 ---
+            # BigGo 的結構通常是一個 <a> 標籤包住圖片(alt)與價格(data-price)
+            # 我們改用更精密的區塊匹配
+            blocks = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>.*?alt="([^"]{10,100})".*?data-price="true">\$?([\d,]+)', html, re.S)
 
-            for i in range(min(len(name_matches), len(price_matches))):
-                price_str = price_matches[i].replace(',', '')
+            for link, name, price in blocks:
+                # 補全相對路徑網址
+                full_link = urljoin("https://biggo.com.tw", link)
+                clean_price = price.replace(',', '')
+                
                 items.append({
-                    "title": name_matches[i].strip(),
-                    "price": int(price_str),
-                    "shop": "BigGo比價"
+                    "title": name.strip(),
+                    "price": int(clean_price),
+                    "link": full_link,
+                    "shop": "BigGo"
                 })
 
-            # 備援：如果上面標籤抓不到，嘗試找原本的 JSON 模式
+            # 備援：如果區塊匹配失敗，使用之前的 JSON 模式但嘗試補上連結
             if not items:
-                raw_json_matches = re.findall(r'\\"n\\"\s*:\s*\\"(.+?)\\"\s*,\s*\\"p\\"\s*:\s*(\d+)', html)
-                for n, p in raw_json_matches:
-                    items.append({"title": n.replace('\\', ''), "price": int(p), "shop": "BigGo比價"})
-
-            # 如果徹底失敗，回傳更多片段除錯
-            if not items:
-                items.append({"title": f"診斷: 找到價格{len(price_matches)}個, 品名{len(name_matches)}個", "price": 0, "shop": "DEBUG"})
+                matches = re.findall(r'\\"n\\"\s*:\s*\\"(.+?)\\"\s*,\s*\\"p\\"\s*:\s*(\d+)', html)
+                for n, p in matches:
+                    items.append({
+                        "title": n.replace('\\', ''),
+                        "price": int(p),
+                        "link": base_url, # 備援回總頁
+                        "shop": "BigGo"
+                    })
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json; charset=utf-8')
@@ -59,9 +59,9 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": f"解析器噴錯: {str(e)}", "price": 0}]).encode('utf-8'))
+            self.wfile.write(json.dumps([]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"HTML Tag Parser Online")
+        self.wfile.write(b"Link Scraper Active")
