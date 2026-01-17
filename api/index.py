@@ -11,26 +11,35 @@ class handler(BaseHTTPRequestHandler):
             html = data.get('html', '')
             
             items = []
-            # 策略：直接在原始 HTML 搜尋所有可能的商品名稱與價格
-            # 模式 A: "n":"...", "p":123 (這是 BigGo 最核心的資料存法)
-            # 使用非貪婪匹配並允許中間有混淆符號
-            matches = re.findall(r'"n"\s*:\s*"(.+?)"\s*,\s*"p"\s*:\s*(\d+)', html)
+            # 策略：直接搜尋 "n":"..." 和 "p":123
+            # 注意：BigGo 原始碼中的引號可能帶有斜線 \"n\"
+            pattern = r'\\"n\\"\s*:\s*\\"(.+?)\\"\s*,\s*\\"p\\"\s*:\s*(\d+)'
+            matches = re.findall(pattern, html)
             
+            # 如果上面抓不到，試試不帶斜線的 (針對不同壓縮格式)
+            if not matches:
+                pattern_alt = r'"n"\s*:\s*"(.+?)"\s*,\s*"p"\s*:\s*(\d+)'
+                matches = re.findall(pattern_alt, html)
+
             for n, p in matches:
                 if len(n) > 5:
-                    # 處理亂碼：將 \u6d17 這種編碼轉回中文
+                    # 處理亂碼：將 \u6d17 轉回中文
                     try:
-                        clean_n = n.encode('utf-8').decode('unicode_escape')
+                        # 處理雙重轉義的 unicode
+                        clean_n = n.encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
                     except:
-                        clean_n = n.replace('\\u0022', '"').replace('\\', '')
-                        
+                        try:
+                            clean_n = n.encode('utf-8').decode('unicode_escape')
+                        except:
+                            clean_n = n.replace('\\', '')
+
                     items.append({
                         "title": clean_n.strip(),
                         "price": int(p),
                         "shop": "BigGo比價"
                     })
 
-            # 去重與限額
+            # 去重
             unique_results = []
             seen = set()
             for item in items:
@@ -43,7 +52,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             
-            # 重要：ensure_ascii=False 解決亂碼關鍵
+            # ensure_ascii=False 解決亂碼關鍵
             response = json.dumps(unique_results[:20], ensure_ascii=False)
             self.wfile.write(response.encode('utf-8'))
             
@@ -55,4 +64,4 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Deep Scan Active")
+        self.wfile.write(b"Deep Scan Parser Active")
