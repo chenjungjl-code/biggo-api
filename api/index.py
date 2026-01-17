@@ -12,43 +12,50 @@ class handler(BaseHTTPRequestHandler):
             html = data.get('html', '')
             items = []
 
-            # 策略 A: 搜尋 BigGo 的 JSON 資料區塊 (這是最穩定的)
-            # BigGo 通常把商品放在一個巨大的 JSON 陣列裡
-            raw_json_matches = re.findall(r'\{"n":"([^"]+)","p":(\d+),"s":"([^"]+)"\}', html)
-            
-            for n, p, s in raw_json_matches:
-                items.append({
-                    "title": n,
-                    "price": int(p),
-                    "shop": s
-                })
+            # --- 策略 A: 搜尋完整 JSON 物件 (最穩定) ---
+            # 匹配 {"n":"品名","p":價格,"s":"商店"} 這種格式
+            matches_a = re.findall(r'\{"n":"([^"]+?)","p":(\d+?),"s":"([^"]+?)"\}', html)
+            for n, p, s in matches_a:
+                items.append({"title": n, "price": int(p), "shop": s})
 
-            # 策略 B: 如果 A 失敗，嘗試抓取另一種常見的屬性格式
+            # --- 策略 B: 如果 A 沒抓到，嘗試鬆散匹配 ---
             if not items:
-                # 搜尋品名: "n":"...", 搜尋價格: "p":...
-                names = re.findall(r'"n":"([^"]+)"', html)
-                prices = re.findall(r'"p":(\d+)', html)
-                # 配對前 20 筆
+                # 匹配 "n":"品名" ... "p":價格
+                # 使用 [^}]*? 確保在同一個物件大括號內
+                matches_b = re.findall(r'"n":"([^"]+?)"[^}]*?"p":(\d+)', html)
+                for n, p in matches_b:
+                    items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
+
+            # --- 策略 C: 針對 window.__INITIAL_STATE__ 進行區塊提取 ---
+            if not items:
+                # 找到所有 "name":"..." 和 "price":... 的配對
+                names = re.findall(r'"name":"([^"]+?)"', html)
+                prices = re.findall(r'"price":(\d+)', html)
                 for i in range(min(len(names), len(prices), 20)):
-                    if len(names[i]) > 5: # 過濾掉太短的字串
-                        items.append({
-                            "title": names[i],
-                            "price": int(prices[i]),
-                            "shop": "BigGo商城"
-                        })
+                    if len(names[i]) > 5:
+                        items.append({"title": names[i], "price": int(prices[i]), "shop": "比價結果"})
+
+            # 移除重複的品名，保留前 15 筆
+            unique_results = []
+            seen = set()
+            for item in items:
+                if item['title'] not in seen:
+                    unique_results.append(item)
+                    seen.add(item['title'])
+                if len(unique_results) >= 15: break
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps(items[:20]).encode('utf-8'))
+            self.wfile.write(json.dumps(unique_results).encode('utf-8'))
             
         except Exception as e:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([]).encode('utf-8'))
+            self.wfile.write(json.dumps([{"title": f"解析發生錯誤: {str(e)}", "price": 0}]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Scanner is ready.")
+        self.wfile.write(b"Power Parser Ready.")
