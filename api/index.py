@@ -12,30 +12,34 @@ class handler(BaseHTTPRequestHandler):
             html = data.get('html', '')
             items = []
 
-            # --- 策略 A: 搜尋完整 JSON 物件 (最穩定) ---
-            # 匹配 {"n":"品名","p":價格,"s":"商店"} 這種格式
-            matches_a = re.findall(r'\{"n":"([^"]+?)","p":(\d+?),"s":"([^"]+?)"\}', html)
-            for n, p, s in matches_a:
-                items.append({"title": n, "price": int(p), "shop": s})
+            # --- 核心邏輯：鎖定 INITIAL_STATE 區塊 ---
+            # 這是 BigGo 目前最核心的資料存放區
+            state_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?});', html, re.DOTALL)
+            
+            if state_match:
+                try:
+                    state_json = json.loads(state_match.group(1))
+                    # 嘗試從 search results 結構中提取
+                    raw_results = state_json.get('search', {}).get('results', [])
+                    for r in raw_results:
+                        if 'n' in r and 'p' in r:
+                            items.append({
+                                "title": r['n'],
+                                "price": int(r['p']),
+                                "shop": r.get('s', '網路商城')
+                            })
+                except:
+                    pass
 
-            # --- 策略 B: 如果 A 沒抓到，嘗試鬆散匹配 ---
+            # --- 備用方案：暴力正則 (如果 INITIAL_STATE 結構改變) ---
             if not items:
-                # 匹配 "n":"品名" ... "p":價格
-                # 使用 [^}]*? 確保在同一個物件大括號內
-                matches_b = re.findall(r'"n":"([^"]+?)"[^}]*?"p":(\d+)', html)
-                for n, p in matches_b:
-                    items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
+                # 匹配 "n":"品名" 和 "p":價格
+                matches = re.findall(r'"n":"([^"]+?)".*?"p":(\d+)', html)
+                for n, p in matches:
+                    if len(n) > 5:
+                        items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
 
-            # --- 策略 C: 針對 window.__INITIAL_STATE__ 進行區塊提取 ---
-            if not items:
-                # 找到所有 "name":"..." 和 "price":... 的配對
-                names = re.findall(r'"name":"([^"]+?)"', html)
-                prices = re.findall(r'"price":(\d+)', html)
-                for i in range(min(len(names), len(prices), 20)):
-                    if len(names[i]) > 5:
-                        items.append({"title": names[i], "price": int(prices[i]), "shop": "比價結果"})
-
-            # 移除重複的品名，保留前 15 筆
+            # 移除重複，取前 15 筆
             unique_results = []
             seen = set()
             for item in items:
@@ -53,9 +57,9 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": f"解析發生錯誤: {str(e)}", "price": 0}]).encode('utf-8'))
+            self.wfile.write(json.dumps([{"title": f"解析失敗: {str(e)}", "price": 0}]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Power Parser Ready.")
+        self.wfile.write(b"Deep Parser Ready.")
