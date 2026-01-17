@@ -1,54 +1,51 @@
 from http.server import BaseHTTPRequestHandler
 import requests
 import json
-import re
+from urllib.parse import urlparse, parse_qs, unquote
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        from urllib.parse import urlparse, parse_qs, unquote
         query = parse_qs(urlparse(self.path).query)
         target_url = unquote(query.get('url', [None])[0])
 
+        # 1. 從 URL 中提取關鍵字 (例如 ariel%20補充包)
+        # 假設網址格式為 https://biggo.com.tw/s/keyword/
+        keyword = target_url.split('/s/')[-1].split('/')[0]
+        
+        # 2. 直接請求 BigGo 的數據介面 (這通常是 JSON，不需要解析 HTML)
+        # 我們模擬一個帶有推薦參數的請求，這更容易成功
+        api_url = f"https://biggo.com.tw/api/v1/search?q={keyword}&v=1"
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://biggo.com.tw/"
+            "Referer": "https://biggo.com.tw/",
+            "X-Requested-With": "XMLHttpRequest"
         }
         
         try:
-            res = requests.get(target_url, headers=headers, timeout=15)
-            html = res.text
+            res = requests.get(api_url, headers=headers, timeout=10)
+            data = res.json() # 直接轉 JSON
+            
             items = []
-
-            # --- 終極暴力正則：抓取所有 "n":"..." 和 "p":... ---
-            # BigGo 的資料即使用 JavaScript 混淆，這兩個 key 通常不會變
-            pattern = r'"n":"([^"]+)".*?"p":(\d+)'
-            matches = re.findall(pattern, html)
-
-            for n, p in matches:
-                # 簡單過濾：品名長度大於 5 且價格大於 10 的才算商品
-                if len(n) > 5 and int(p) > 10:
-                    items.append({
-                        "title": n,
-                        "price": int(p),
-                        "shop": "BigGo搜尋"
-                    })
-
-            # 如果抓到太多重複的，只取前 20 筆
-            unique_items = []
-            seen = set()
-            for item in items:
-                if item['title'] not in seen:
-                    unique_items.append(item)
-                    seen.add(item['title'])
-                if len(unique_items) >= 20: break
+            # 根據 BigGo API 的結構提取資料 (results 下的清單)
+            results = data.get('results', [])
+            
+            for r in results:
+                items.append({
+                    "title": r.get('n'),      # Name
+                    "price": int(r.get('p')), # Price
+                    "shop": r.get('s', '網路商城') # Shop
+                })
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps(unique_items).encode('utf-8'))
+            self.wfile.write(json.dumps(items[:20]).encode('utf-8'))
             
         except Exception as e:
+            # 如果 API 請求失敗，回傳一個帶有錯誤訊息的 JSON 供偵錯
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": f"Error: {str(e)}", "price": 0}]).encode('utf-8'))
+            error_data = [{"title": f"API Error: {str(e)}", "price": 0, "shop": "System"}]
+            self.wfile.write(json.dumps(error_data).encode('utf-8'))
