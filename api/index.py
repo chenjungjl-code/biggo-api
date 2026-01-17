@@ -10,42 +10,41 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(content_length))
             url = data.get('url', '').replace("biggo.uk", "biggo.com.tw")
             
-            # --- 超級偽裝標頭 ---
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'zh-TW,zh;q=0.9',
-                'Cookie': 'biggo_country=tw; currency=TWD',
-                'Referer': 'https://www.google.com/', # 偽裝來源
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Cookie': 'biggo_country=tw',
+                'Accept-Language': 'zh-TW,zh;q=0.9'
             }
             
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=20) as response:
+            with urllib.request.urlopen(req, timeout=15) as response:
                 html = response.read().decode('utf-8', 'ignore')
 
+            # --- 終極暴力搜尋：不分格式，只要有名稱跟數字價格就抓 ---
             items = []
-            # 模式 1: 抓取 BigGo 台灣版特有的 JSON (n 為品名, p 為價格)
-            # 模式 2: 抓取 HTML 內的價格數字標籤 (備援)
-            matches = re.findall(r'\\"n\\"\s*:\s*\\"(.+?)\\"\s*,\s*\\"p\\"\s*:\s*(\d+)', html)
             
-            if not matches:
-                # 暴力搜尋：尋找所有 "name":"..." 旁邊有 "price":... 的結構
-                matches = re.findall(r'"name":"([^"]+?)".*?"price":(\d+)', html)
+            # 模式 A: 尋找所有 "n":"品名", "p":123 (無視轉義)
+            raw_data = re.findall(r'n["\\]+:\s*["\\]+(.+?)["\\]+\s*,\s*["\\]+p["\\]+:\s*(\d+)', html)
+            
+            # 模式 B: 尋找所有 "name":"品名", "price":123
+            if not raw_data:
+                raw_data = re.findall(r'name["\\]+:\s*["\\]+(.+?)["\\]+.*?price["\\]+:\s*(\d+)', html)
 
-            for n, p in matches:
+            for n, p in raw_data:
+                # 簡單清理名稱中的 Unicode 和斜線
+                clean_n = n.replace('\\u0022', '').replace('\\', '').strip()
+                # 還原編碼 (處理像 \u6d17 這種字)
                 try:
-                    name = n.encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
+                    clean_n = clean_n.encode().decode('unicode_escape')
                 except:
-                    name = n.replace('\\', '')
+                    pass
                 
-                if len(name) > 5:
-                    items.append({"title": name.strip(), "price": int(p), "shop": "BigGo比價"})
+                if 5 < len(clean_n) < 100:
+                    items.append({"title": clean_n, "price": int(p), "shop": "BigGo比價"})
 
-            # 如果還是失敗，噴出診斷片段（確保這次一定有文字回傳）
+            # 如果還是空的，抓取網頁中所有出現 $ 數字的標籤片段作為最後診斷
             if not items:
-                items.append({"title": f"診斷報告: 抓到 {len(html)} 字 | 開頭: {html[:100]}", "price": 0, "shop": "SYSTEM"})
+                items.append({"title": f"解析失敗。樣版片段: {html[html.find('price'):html.find('price')+200]}", "price": 0, "shop": "DEBUG"})
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json; charset=utf-8')
@@ -55,9 +54,9 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": f"致命錯誤: {str(e)}", "price": 0, "shop": "SYSTEM"}]).encode('utf-8'))
+            self.wfile.write(json.dumps([{"title": f"錯誤: {str(e)}", "price": 0}]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Super Scraper Online")
+        self.wfile.write(b"Deep Scan Active")
