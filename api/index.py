@@ -12,52 +12,53 @@ class handler(BaseHTTPRequestHandler):
             
             items = []
             
-            # --- 核心策略：針對 58 萬字的大型網頁進行特徵提取 ---
-            # 這是 BigGo 商品資料最穩定的特徵格式
-            # 我們改用非貪婪匹配，並允許中間有換行符 (re.S)
-            matches = re.findall(r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)', html, re.S)
+            # 策略 A: 針對 BigGo 的特殊屬性 data-n 和 data-p (如果有的話)
+            # 或是在腳本標籤內的特定格式
+            raw_patterns = [
+                r'"n":"([^"]+?)".*?"p":(\d+)',           # 傳統格式
+                r'name":"([^"]+?)".*?price":(\d+)',       # 標準格式
+                r'title":"([^"]+?)".*?price":(\d+)',      # 變體格式
+                r'\"n\":\"([^"]+?)\",\"p\":(\d+)'         # 帶轉義格式
+            ]
             
-            for n, p in matches:
-                # 過濾掉一些系統內建的雜項 (通常品名很短)
-                if len(n) > 5:
-                    items.append({
-                        "title": n,
-                        "price": int(p),
-                        "shop": "BigGo比價"
-                    })
-
-            # 如果上面失敗，嘗試另一種 BigGo 可能的格式 (全名+價格)
+            for pattern in raw_patterns:
+                matches = re.findall(pattern, html, re.S)
+                for n, p in matches:
+                    if len(n) > 8 and len(n) < 100: # 確保品名長度合理
+                        items.append({
+                            "title": n.encode().decode('unicode_escape', 'ignore') if '\\u' in n else n,
+                            "price": int(p),
+                            "shop": "BigGo比價"
+                        })
+            
+            # 策略 B: 針對 unicode 編碼處理 (BigGo 常見)
+            # 例如 \u6d17\u8863\u7cbe
             if not items:
-                matches_alt = re.findall(r'"name"\s*:\s*"([^"]+)"\s*,\s*"price"\s*:\s*(\d+)', html, re.S)
-                for n, p in matches_alt:
-                    items.append({"title": n, "price": int(p), "shop": "BigGo商城"})
+                unicode_matches = re.findall(r'\\u[0-9a-fA-F]{4}', html)
+                if unicode_matches:
+                    # 如果發現大量 unicode，嘗試直接抓取價格周圍的文字
+                    items.append({"title": "偵測到加密編碼，正在嘗試解析...", "price": 0, "shop": "System"})
 
-            # 去重與限額
+            # 去重
             unique_items = []
             seen = set()
             for item in items:
-                if item['title'] not in seen:
+                if item['title'] not in seen and item['price'] > 0:
                     unique_items.append(item)
                     seen.add(item['title'])
-                if len(unique_items) >= 20: break
-
+            
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            
-            # 確保回傳 JSON 格式
-            response_json = json.dumps(unique_items)
-            self.wfile.write(response_json.encode('utf-8'))
+            self.wfile.write(json.dumps(unique_items[:20]).encode('utf-8'))
             
         except Exception as e:
             self.send_response(200)
-            self.send_header('Content-type', 'application/json')
             self.end_headers()
-            # 發生錯誤時回傳空的陣列
             self.wfile.write(json.dumps([]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Parser is running.")
+        self.wfile.write(b"Scanner v3 Active")
