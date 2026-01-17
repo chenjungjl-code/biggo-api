@@ -10,31 +10,38 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(post_data)
             html = data.get('html', '')
             
-            # 1. 徹底解碼 Unicode 亂碼
-            # 使用 unicode_escape 將 \uXXXX 轉回中文
+            # 第一層解碼：處理 Unicode 轉義
             try:
-                decoded_html = html.encode().decode('unicode_escape')
+                # 解決 \u6d17\u8863 這種亂碼
+                html = html.encode().decode('unicode_escape')
             except:
-                decoded_html = html
+                pass
 
             items = []
-            # 2. 同時搜尋原始與解碼後的內容
-            # BigGo 資料核心： "n":"品名","p":價格,"s":"商店"
-            pattern = r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)'
-            matches = re.findall(pattern, decoded_html)
+            
+            # 策略：寬鬆匹配所有包含 "n" 和 "p" 的結構
+            # 這裡使用 [\s\S]*? 來跨越任何換行或空格
+            # 格式 1: "n":"品名","p":價格
+            pattern1 = r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)'
+            matches1 = re.findall(pattern1, html)
+            
+            # 格式 2: "name":"品名","price":價格
+            pattern2 = r'"name"\s*:\s*"([^"]+)"\s*,\s*"price"\s*:\s*(\d+)'
+            matches2 = re.findall(pattern2, html)
 
-            for n, p in matches:
-                # 過濾無意義的短字串
-                if len(n) > 5:
-                    # 再次清理品名中殘留的轉義符號
-                    clean_n = n.replace('\\', '').replace('u0022', '"')
+            all_matches = matches1 + matches2
+
+            for n, p in all_matches:
+                # 清除可能殘留的轉義字元
+                clean_n = n.replace('\\"', '"').replace('\\/', '/')
+                if len(clean_n) > 5:
                     items.append({
                         "title": clean_n,
                         "price": int(p),
                         "shop": "BigGo搜尋"
                     })
 
-            # 3. 去重
+            # 去重
             unique_items = []
             seen = set()
             for item in items:
@@ -56,4 +63,4 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Deep Cleaning Parser Active")
+        self.wfile.write(b"Ultra Parser Active")
