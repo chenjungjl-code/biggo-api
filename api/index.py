@@ -10,33 +10,31 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(post_data)
             html = data.get('html', '')
             
-            # 策略 A: 針對 BigGo 可能的 Unicode 混淆進行解碼
-            # 有時候資料會長這樣: \u0022n\u0022:\u0022Ariel\u0022
-            decoded_html = html.encode().decode('unicode_escape', 'ignore')
-            
+            # 1. 徹底解碼 Unicode 亂碼
+            # 使用 unicode_escape 將 \uXXXX 轉回中文
+            try:
+                decoded_html = html.encode().decode('unicode_escape')
+            except:
+                decoded_html = html
+
             items = []
-            # 同時在原始與解碼後的 HTML 中搜尋
-            sources = [html, decoded_html]
-            
-            for source in sources:
-                # 嘗試多種匹配模式
-                patterns = [
-                    r'"n":"([^"]+?)".*?"p":(\d+)',
-                    r'name":"([^"]+?)".*?price":(\d+)',
-                    r'title":"([^"]+?)".*?price":(\d+)'
-                ]
-                for p in patterns:
-                    for n, price in re.findall(p, source):
-                        if 5 < len(n) < 100:
-                            items.append({"title": n, "price": int(price), "shop": "BigGo比價"})
+            # 2. 同時搜尋原始與解碼後的內容
+            # BigGo 資料核心： "n":"品名","p":價格,"s":"商店"
+            pattern = r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)'
+            matches = re.findall(pattern, decoded_html)
 
-            # 如果還是空，抓取 HTML 中的腳本區塊 (Script) 做最後診斷
-            if not items:
-                scripts = re.findall(r'<script.*?> (.*?)</script>', html, re.S)
-                for s in scripts[:5]:
-                    if "n" in s and "p" in s: # 如果腳本裡有類似格式
-                        items.append({"title": "找到潛在資料塊，請檢查解析規則", "price": 0, "shop": "System"})
+            for n, p in matches:
+                # 過濾無意義的短字串
+                if len(n) > 5:
+                    # 再次清理品名中殘留的轉義符號
+                    clean_n = n.replace('\\', '').replace('u0022', '"')
+                    items.append({
+                        "title": clean_n,
+                        "price": int(p),
+                        "shop": "BigGo搜尋"
+                    })
 
+            # 3. 去重
             unique_items = []
             seen = set()
             for item in items:
@@ -58,4 +56,4 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Diagnostic Parser Online")
+        self.wfile.write(b"Deep Cleaning Parser Active")
