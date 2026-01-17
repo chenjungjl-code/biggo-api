@@ -10,39 +10,31 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(post_data)
             html = data.get('html', '')
             
-            # 1. 徹底解碼：還原所有 Unicode 與轉義
-            # 處理像 \u0022 (") 和 \/ (/) 以及 \\"
-            html = html.replace('\\u0022', '"').replace('\\/', '/').replace('\\"', '"')
-            try:
-                html = html.encode('utf-8').decode('unicode_escape', 'ignore')
-            except:
-                pass
-
             items = []
+            # 策略：直接在原始 HTML 搜尋所有可能的商品名稱與價格
+            # 模式 A: "n":"...", "p":123 (這是 BigGo 最核心的資料存法)
+            # 使用非貪婪匹配並允許中間有混淆符號
+            matches = re.findall(r'"n"\s*:\s*"(.+?)"\s*,\s*"p"\s*:\s*(\d+)', html)
             
-            # 2. 暴力提取模式：針對 BigGo 網頁結構的特徵
-            # 我們找尋: "n":"任意文字","p":數字 
-            # 注意：使用 re.DOTALL 跨行搜尋
-            raw_matches = re.findall(r'"n"\s*:\s*"([^"]+?)"\s*,\s*"p"\s*:\s*(\d+)', html)
-            
-            # 如果上面失敗，找備用格式 name / price
-            if not raw_matches:
-                raw_matches = re.findall(r'"name"\s*:\s*"([^"]+?)"\s*,\s*"price"\s*:\s*(\d+)', html)
-
-            for n, p in raw_matches:
-                # 排除太短的（可能是按鈕文字）
+            for n, p in matches:
                 if len(n) > 5:
+                    # 處理亂碼：將 \u6d17 這種編碼轉回中文
+                    try:
+                        clean_n = n.encode('utf-8').decode('unicode_escape')
+                    except:
+                        clean_n = n.replace('\\u0022', '"').replace('\\', '')
+                        
                     items.append({
-                        "title": n.replace('\\', ''), 
+                        "title": clean_n.strip(),
                         "price": int(p),
-                        "shop": "BigGo搜尋"
+                        "shop": "BigGo比價"
                     })
 
-            # 3. 去重並限制 20 筆
+            # 去重與限額
             unique_results = []
             seen = set()
             for item in items:
-                if item['title'] not in seen:
+                if item['title'] not in seen and item['price'] > 0:
                     unique_results.append(item)
                     seen.add(item['title'])
 
@@ -51,6 +43,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             
+            # 重要：ensure_ascii=False 解決亂碼關鍵
             response = json.dumps(unique_results[:20], ensure_ascii=False)
             self.wfile.write(response.encode('utf-8'))
             
@@ -62,5 +55,4 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Ultimate Brute Force Parser Ready.")
-        
+        self.wfile.write(b"Deep Scan Active")
