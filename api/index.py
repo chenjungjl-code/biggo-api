@@ -10,37 +10,41 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(content_length))
             url = data.get('url', '')
             
-            # 強制導向台灣站點並設定較長等待時間
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            # 1. 抓取網頁
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
             with urllib.request.urlopen(req, timeout=15) as response:
-                html = response.read().decode('utf-8', 'ignore')
+                raw_data = response.read()
+                html = raw_data.decode('utf-8', 'ignore')
 
-            # 抓取 n 和 p 標籤 (BigGo 核心數據)
+            # 2. 嘗試抓取商品
             items = []
             matches = re.findall(r'\\"n\\"\s*:\s*\\"(.+?)\\"\s*,\s*\\"p\\"\s*:\s*(\d+)', html)
             if not matches:
                 matches = re.findall(r'"n"\s*:\s*"([^"]+)"\s*,\s*"p"\s*:\s*(\d+)', html)
 
             for n, p in matches:
-                # 去除 Unicode 編碼轉義
                 try:
                     name = n.encode().decode('unicode_escape')
                 except:
-                    name = n.replace('\\', '')
-                
-                if len(name) > 3:
-                    items.append({"title": name, "price": int(p), "shop": "BigGo"})
+                    name = n
+                items.append({"title": name, "price": int(p), "shop": "BigGo"})
+
+            # 3. 關鍵：如果抓不到商品，回傳網頁開頭供除錯
+            if not items:
+                debug_info = html[:500].replace('"', "'").replace("\n", " ")
+                items.append({"title": f"DEBUG_FAIL: {debug_info}", "price": 0, "shop": "SYSTEM"})
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json; charset=utf-8')
             self.end_headers()
             self.wfile.write(json.dumps(items[:20], ensure_ascii=False).encode('utf-8'))
+            
         except Exception as e:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(json.dumps([{"title": str(e), "price": 0}]).encode('utf-8'))
+            self.wfile.write(json.dumps([{"title": f"ERROR: {str(e)}", "price": 0, "shop": "SYSTEM"}]).encode('utf-8'))
 
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Ready")
+        self.wfile.write(b"Diagnostic System Ready")
